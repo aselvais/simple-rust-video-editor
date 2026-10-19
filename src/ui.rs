@@ -48,6 +48,10 @@ pub struct QuickEditApp {
     scrub_pos: f64,
     /// The GPU texture for the current preview frame, if one is loaded.
     preview_texture: Option<egui::TextureHandle>,
+    /// Whether `ffmpeg` was found on PATH at startup.
+    ffmpeg_ok: bool,
+    /// Whether `ffprobe` was found on PATH at startup.
+    ffprobe_ok: bool,
 }
 
 impl QuickEditApp {
@@ -64,11 +68,28 @@ impl QuickEditApp {
             last_image_rect: EguiRect::NOTHING,
             scrub_pos: 0.0,
             preview_texture: None,
+            ffmpeg_ok: ffmpeg::ffmpeg_available(),
+            ffprobe_ok: ffmpeg::ffprobe_available(),
         }
     }
 
     fn set_status(&mut self, s: impl Into<String>) {
         self.status = s.into();
+    }
+
+    /// Show a one-line amber warning when FFmpeg isn't on PATH.
+    ///
+    /// QuickEdit can't probe, preview or export without it, so we surface the
+    /// problem immediately (on both the welcome screen and the status bar) with
+    /// a clear, actionable message.
+    fn ffmpeg_warning(&self, ui: &mut Ui) {
+        if self.ffmpeg_ok && self.ffprobe_ok {
+            return;
+        }
+        ui.colored_label(
+            egui::Color32::from_rgb(220, 160, 40),
+            "⚠ FFmpeg/FFprobe not found on PATH — install FFmpeg to enable preview, export and thumbnails.",
+        );
     }
 
     /// Poll the export channel once; keep the receiver if the worker hasn't
@@ -133,8 +154,11 @@ impl QuickEditApp {
         match picked {
             Some(path) => match Video::open(&path) {
                 Ok(mut video) => {
-                    // Make an initial thumbnail so the list isn't blank.
-                    if let Err(e) = video.generate_thumbnail(0.0) {
+                    // Make an initial thumbnail so the list isn't blank. Seek to a
+                    // sensible point (≈1s in, 0s for very short clips) rather than
+                    // the first frame, which can be black.
+                    let seek = ffmpeg::frame_seek(video.info.duration_secs);
+                    if let Err(e) = video.generate_thumbnail(seek) {
                         self.error = Some(e);
                         self.set_status("Opened, but the thumbnail failed.");
                     }
@@ -202,7 +226,8 @@ impl QuickEditApp {
                             egui::TextureOptions::LINEAR,
                         ));
                     }
-                    Err(_) => {
+                    Err(e) => {
+                        self.error = Some(AppError::image(&path, e));
                         self.preview_texture = None;
                     }
                 }
@@ -328,6 +353,7 @@ impl QuickEditApp {
             ui.heading("QuickEdit");
             ui.add_space(8.0);
             ui.label("Open a video to trim, rotate or crop it.");
+            self.ffmpeg_warning(ui);
             ui.add_space(16.0);
             let clicked = ui.button("Open video…").clicked();
             if clicked {
@@ -373,7 +399,14 @@ impl QuickEditApp {
                 self.project.select(i);
                 ctx.request_repaint();
             }
-            ui.label(format!("    {resolution}{}", if has_edit { "  ✎" } else { "" }));
+            // Show the pending-edit summary (e.g. "rotate 90°, crop 1920x1080")
+            // for clips that have unsaved edits.
+            let detail = if has_edit {
+                format!("    {resolution}  ✎ {}", self.project.videos[i].edit.describe())
+            } else {
+                format!("    {resolution}")
+            };
+            ui.label(detail);
         }
         if self.project.videos.is_empty() {
             ui.add_space(8.0);
@@ -397,7 +430,12 @@ impl QuickEditApp {
             ui.horizontal(|ui| {
                 ui.colored_label(egui::Color32::RED, format!("Error: {err}"));
             });
+            // If the error names a file, show which one on the next line.
+            if let Some(path) = err.path_hint() {
+                ui.label(format!("  at {}", path.display()));
+            }
         }
+        self.ffmpeg_warning(ui);
     }
 }
 

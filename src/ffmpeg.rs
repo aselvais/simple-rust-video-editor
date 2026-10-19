@@ -245,9 +245,9 @@ pub fn build_filter_chain(state: &EditState, display_w: u32, display_h: u32) -> 
     //    transposes above, the source frame has been rotated by the total
     //    angle, so we undo that to express the crop in source coordinates.
     if let Some(crop) = state.crop {
-        let total = normalise_cw(
-            state.metadata_rotation() as i64 + state.user_rotation() as i64,
-        );
+        // The crop is in *display* space, so map it back through the total
+        // (metadata + user) rotation into source coordinates.
+        let total = state.total_rotation();
         let src = transform_crop_to_source(crop, display_w, display_h, total);
         let (x, y, w, h) = even_align(src, display_w, display_h);
         filters.push(format!("crop={w}:{h}:{x}:{y}"));
@@ -373,9 +373,8 @@ pub fn apply_edits(input: &Path, output: &Path, state: &EditState) -> Result<Pat
 /// Given the *source* (pre-rotation) dimensions and the active edits, return
 /// the dimensions of the displayed preview image.
 pub fn display_dimensions(width: u32, height: u32, state: &EditState) -> (u32, u32) {
-    let total = normalise_cw(
-        state.metadata_rotation() as i64 + state.user_rotation() as i64,
-    );
+    // Total rotation (metadata + user); 90/270° swap width and height.
+    let total = state.total_rotation();
     if total == 90 || total == 270 {
         (height, width)
     } else {

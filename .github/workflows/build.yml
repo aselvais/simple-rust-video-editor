@@ -1,0 +1,81 @@
+name: build
+
+# Build release binaries for Linux, macOS and Windows on every push to main (and
+# on demand). Run "Actions → build → Run workflow" to get a fresh set of
+# downloadable artifacts for all three platforms.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            os_tag: linux
+            arch_tag: x86_64
+            ext: ""
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            os_tag: darwin
+            arch_tag: x86_64
+            ext: ""
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            os_tag: darwin
+            arch_tag: arm64
+            ext: ""
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            os_tag: windows
+            arch_tag: x64
+            ext: ".exe"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install system deps + FFmpeg (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          # eframe needs these at build/link time on Linux; ffmpeg is a runtime dep.
+          sudo apt-get install -y ffmpeg libgtk-3-dev libasound2-dev libxkbcommon-dev
+
+      - name: Install FFmpeg (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+
+      - name: Install FFmpeg (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path ffmpeg | Out-Null
+          Invoke-WebRequest -Uri https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -OutFile ffmpeg.zip
+          Expand-Archive ffmpeg.zip -DestinationPath .
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Stage binary
+        run: |
+          mkdir -p builds
+          cp "target/${{ matrix.target }}/release/quickedit${{ matrix.ext }}" "builds/quickedit-${{ matrix.os_tag }}-${{ matrix.arch_tag }}${{ matrix.ext }}"
+          ls -la builds
+        shell: bash
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: quickedit-${{ matrix.os_tag }}-${{ matrix.arch_tag }}
+          path: builds/*
+          if-no-files-found: error

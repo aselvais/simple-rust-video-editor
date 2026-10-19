@@ -70,8 +70,14 @@ impl AppError {
     }
 
     /// The absolute path involved, if the error knows one.
+    ///
+    /// Only the [`AppError::Image`] variant carries a path; the UI uses this to
+    /// show *which* file failed to load.
     pub fn path_hint(&self) -> Option<PathBuf> {
-        None
+        match self {
+            Self::Image { path, .. } => Some(PathBuf::from(path.as_str())),
+            _ => None,
+        }
     }
 }
 

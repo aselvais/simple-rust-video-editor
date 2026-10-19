@@ -210,7 +210,7 @@ impl QuickEditApp {
                 if let Some(handle) = self.preview_texture.clone() {
                     let image =
                         egui::Image::from_texture(&handle).max_width(PREVIEW_MAX_WIDTH);
-                    let resp = ui.image(image);
+                    let resp = ui.add(image);
                     self.last_image_rect = resp.rect;
                     self.handle_crop_drag(ctx);
                     if self.crop_enabled {
@@ -221,10 +221,10 @@ impl QuickEditApp {
                 }
             }
             Some(_) => {
-                ui.label("(preview file missing)")
+                ui.label("(preview file missing)");
             }
             None => {
-                ui.label("(no preview yet)")
+                ui.label("(no preview yet)");
             }
         }
 
@@ -248,10 +248,10 @@ impl QuickEditApp {
                     let crop = v.edit.crop;
                     match crop {
                         Some(c) => {
-                            ui.label(format!("{}×{} @ ({}, {})", c.w, c.h, c.x, c.y))
+                            ui.label(format!("{}×{} @ ({}, {})", c.w, c.h, c.x, c.y));
                         }
                         None => {
-                            ui.label("no crop")
+                            ui.label("no crop");
                         }
                     }
                 }
@@ -302,7 +302,7 @@ impl QuickEditApp {
     }
 }
 impl eframe::App for QuickEditApp {
-    fn update(&mut self, ctx: &Context) {
+    fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
         self.poll_export(ctx);
 
         if self.project.is_empty() {
@@ -395,7 +395,7 @@ impl QuickEditApp {
         });
         if let Some(err) = &self.error {
             ui.horizontal(|ui| {
-                ui.color_label(egui::Color32::RED, format!("Error: {err}"));
+                ui.colored_label(egui::Color32::RED, format!("Error: {err}"));
             });
         }
     }
@@ -416,7 +416,13 @@ impl QuickEditApp {
 
     /// Handle starting / continuing / finishing a crop drag over the preview.
     fn handle_crop_drag(&mut self, ctx: &Context) {
-        let down = ctx.input(|i| i.pointer.primary_down_at());
+        let down = ctx.input(|i| {
+            if i.pointer.primary_pressed() {
+                i.pointer.interact_pos()
+            } else {
+                None
+            }
+        });
         let interact = ctx.input(|i| i.pointer.interact_pos());
         let released = ctx.input(|i| i.pointer.primary_released());
         let rect = self.last_image_rect;

@@ -94,7 +94,7 @@ impl Video {
     /// Generate (and cache) a thumbnail for the list view.
     pub fn generate_thumbnail(&mut self, seek_secs: f64) -> Result<PathBuf, AppError> {
         let out =
-            ffmpeg::temp_path(&format!("quickedit_{}", self.stem()), self.source.len() as u64);
+            ffmpeg::temp_path(&format!("quickedit_{}", self.stem()), self.source.as_os_str().len() as u64);
         ffmpeg::generate_thumbnail(&self.source, &out, THUMBNAIL_SIZE, seek_secs)?;
         self.thumbnail = Some(out.clone());
         Ok(out)
@@ -103,7 +103,7 @@ impl Video {
     /// Extract a full-size preview frame at `seek_secs` and remember it.
     pub fn extract_frame(&mut self, seek_secs: f64) -> Result<PathBuf, AppError> {
         let out =
-            ffmpeg::temp_path(&format!("quickedit_frame_{}", self.stem()), self.source.len() as u64);
+            ffmpeg::temp_path(&format!("quickedit_frame_{}", self.stem()), self.source.as_os_str().len() as u64);
         ffmpeg::extract_frame(&self.source, &out, seek_secs)?;
         self.preview_frame = Some(out.clone());
         Ok(out)

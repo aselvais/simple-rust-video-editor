@@ -15,7 +15,6 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use egui::{self, Context, Pos2, Rect as EguiRect, Stroke, Ui};
-use eframe::Frame;
 
 use crate::error::AppError;
 use crate::ffmpeg;
@@ -47,6 +46,8 @@ pub struct QuickEditApp {
     last_image_rect: EguiRect,
     /// The scrub position as a 0..1 fraction of the current clip.
     scrub_pos: f64,
+    /// The GPU texture for the current preview frame, if one is loaded.
+    preview_texture: Option<egui::TextureHandle>,
 }
 
 impl QuickEditApp {
@@ -62,6 +63,7 @@ impl QuickEditApp {
             crop_drag: None,
             last_image_rect: EguiRect::NOTHING,
             scrub_pos: 0.0,
+            preview_texture: None,
         }
     }
 
@@ -125,13 +127,7 @@ impl QuickEditApp {
     /// Open the native file dialog and load whatever the user picks.
     fn open_dialog(&mut self, ctx: &Context) {
         let dialog = rfd::FileDialog::new()
-            .add_extension("mp4")
-            .add_extension("mov")
-            .add_extension("avi")
-            .add_extension("mkv")
-            .add_extension("webm")
-            .add_extension("m4v")
-            .add_extension("ts");
+            .add_filter("Video files", &["mp4", "mov", "avi", "mkv", "webm", "m4v", "ts"]);
 
         let picked = dialog.pick_file();
         match picked {
@@ -188,18 +184,48 @@ impl QuickEditApp {
         ui.heading("Editor");
 
         // --- Preview image ---
+        // egui 0.29 removed `Image::from_path`, so we decode the frame with the
+        // `image` crate and upload it as a texture. The texture is re-uploaded
+        // each time the preview is rendered, which mirrors the previous
+        // per-frame reload (the preview file is reused in place on every scrub).
         match self.preview_path() {
             Some(path) if path.exists() => {
-                let image = egui::Image::from_path(&path).max_width(PREVIEW_MAX_WIDTH);
-                let resp = ui.image(image);
-                self.last_image_rect = resp.rect();
-                self.handle_crop_drag(ctx);
-                if self.crop_enabled {
-                    self.draw_crop_overlay(ui);
+                match image::open(&path) {
+                    Ok(decoded) => {
+                        let rgba = decoded.to_rgba8();
+                        let size = [rgba.width() as usize, rgba.height() as usize];
+                        let color_image =
+                            egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
+                        self.preview_texture = Some(ctx.load_texture(
+                            "preview",
+                            color_image,
+                            egui::TextureOptions::LINEAR,
+                        ));
+                    }
+                    Err(_) => {
+                        self.preview_texture = None;
+                    }
+                }
+
+                if let Some(handle) = self.preview_texture.clone() {
+                    let image =
+                        egui::Image::from_texture(&handle).max_width(PREVIEW_MAX_WIDTH);
+                    let resp = ui.image(image);
+                    self.last_image_rect = resp.rect;
+                    self.handle_crop_drag(ctx);
+                    if self.crop_enabled {
+                        self.draw_crop_overlay(ui);
+                    }
+                } else {
+                    ui.label("(unable to load preview image)");
                 }
             }
-            Some(_) => ui.label("(preview file missing)"),
-            None => ui.label("(no preview yet)"),
+            Some(_) => {
+                ui.label("(preview file missing)")
+            }
+            None => {
+                ui.label("(no preview yet)")
+            }
         }
 
         // --- Scrub + frame extraction ---
@@ -221,8 +247,12 @@ impl QuickEditApp {
                 Some(v) => {
                     let crop = v.edit.crop;
                     match crop {
-                        Some(c) => ui.label(format!("{}×{} @ ({}, {})", c.w, c.h, c.x, c.y)),
-                        None => ui.label("no crop"),
+                        Some(c) => {
+                            ui.label(format!("{}×{} @ ({}, {})", c.w, c.h, c.x, c.y))
+                        }
+                        None => {
+                            ui.label("no crop")
+                        }
                     }
                 }
                 None => {}
@@ -272,7 +302,7 @@ impl QuickEditApp {
     }
 }
 impl eframe::App for QuickEditApp {
-    fn update(&mut self, _frame: &mut Frame, ctx: &Context) {
+    fn update(&mut self, ctx: &Context) {
         self.poll_export(ctx);
 
         if self.project.is_empty() {
@@ -288,7 +318,10 @@ impl eframe::App for QuickEditApp {
             egui::CentralPanel::default().show(ctx, |ui| self.editor(ui, ctx));
         }
     }
+}
 
+impl QuickEditApp {
+    /// The welcome screen shown when the project has no clips.
     fn empty_state(&mut self, ui: &mut Ui, ctx: &Context) {
         ui.vertical_centered(|ui| {
             ui.add_space(64.0);
@@ -301,6 +334,70 @@ impl eframe::App for QuickEditApp {
                 self.open_dialog(ctx);
             }
         });
+    }
+
+    /// The top bar: app title, an "open video" button and an export indicator.
+    fn top_bar(&mut self, ctx: &Context) {
+        egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.strong("QuickEdit");
+                ui.separator();
+                if ui.button("Open video…").clicked() {
+                    self.open_dialog(ctx);
+                }
+                if let Some(name) = &self.exporting_name {
+                    ui.separator();
+                    ui.spinner();
+                    ui.label(format!("Exporting {name}…"));
+                }
+            });
+        });
+    }
+
+    /// The left panel: every clip, with a selection highlight and edit marker.
+    fn video_list(&mut self, ui: &mut Ui, ctx: &Context) {
+        ui.heading("Clips");
+        if ui.button("＋ Open").clicked() {
+            self.open_dialog(ctx);
+        }
+        ui.separator();
+
+        for i in 0..self.project.videos.len() {
+            let name = self.project.videos[i].name();
+            let duration = self.project.videos[i].duration_label();
+            let resolution = self.project.videos[i].resolution_label();
+            let has_edit = self.project.videos[i].edit.has_edits();
+            let selected = i == self.project.index;
+
+            if ui.selectable_label(selected, format!("{name}  {duration}")).clicked() {
+                self.project.select(i);
+                ctx.request_repaint();
+            }
+            ui.label(format!("    {resolution}{}", if has_edit { "  ✎" } else { "" }));
+        }
+        if self.project.videos.is_empty() {
+            ui.add_space(8.0);
+            ui.label("(no clips yet)");
+        }
+    }
+
+    /// The bottom bar: status text, pending-edit count and any error.
+    fn status_bar(&self, ui: &mut Ui) {
+        let pending = self.project.pending_edit_count();
+        let plural = if pending == 1 { "" } else { "s" };
+        ui.horizontal(|ui| {
+            ui.label(&self.status);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if pending > 0 {
+                    ui.label(format!("{pending} unsaved edit{plural}"));
+                }
+            });
+        });
+        if let Some(err) = &self.error {
+            ui.horizontal(|ui| {
+                ui.color_label(egui::Color32::RED, format!("Error: {err}"));
+            });
+        }
     }
 }
 
@@ -319,19 +416,21 @@ impl QuickEditApp {
 
     /// Handle starting / continuing / finishing a crop drag over the preview.
     fn handle_crop_drag(&mut self, ctx: &Context) {
-        let pointer = ctx.input(|i| i.pointer());
+        let down = ctx.input(|i| i.pointer.primary_down_at());
+        let interact = ctx.input(|i| i.pointer.interact_pos());
+        let released = ctx.input(|i| i.pointer.primary_released());
         let rect = self.last_image_rect;
 
-        if pointer.primary_down_at().map_or(false, |p| rect.contains(p)) {
-            self.crop_drag = Some((p, p));
+        if let Some(pos) = down.filter(|p| rect.contains(*p)) {
+            self.crop_drag = Some((pos, pos));
             self.crop_enabled = true;
         }
         if let Some((start, _)) = self.crop_drag {
-            if let Some(pos) = pointer.interact_pos() {
+            if let Some(pos) = interact {
                 self.crop_drag = Some((start, pos));
             }
         }
-        if pointer.primary_released() {
+        if released {
             if let Some((start, end)) = self.crop_drag.take() {
                 let (dx0, dy0, dx1, dy1) = self.screen_to_display(rect, start, end);
                 let x = dx0.min(dx1);
@@ -372,7 +471,7 @@ impl QuickEditApp {
             let miny = start.y.min(end.y);
             let maxy = start.y.max(end.y);
             let drag = EguiRect::from_min_max(Pos2::new(minx, miny), Pos2::new(maxx, maxy));
-            painter.rect_stroke(drag, 0.0, Stroke::new(2.0, egui::Color32::from_rgb(80, 200, 255)));
+            painter.rect_stroke(drag, 0.0, Stroke::new(2.0_f32, egui::Color32::from_rgb(80, 200, 255)));
         }
 
         if let Some(c) = video.edit.crop {
@@ -380,7 +479,7 @@ impl QuickEditApp {
                 Pos2::new(rect.left() + c.x as f32 * sx, rect.top() + c.y as f32 * sy),
                 egui::vec2(c.w as f32 * sx, c.h as f32 * sy),
             );
-            painter.rect_stroke(r, 0.0, Stroke::new(2.0, egui::Color32::from_rgb(80, 200, 255)));
+            painter.rect_stroke(r, 0.0, Stroke::new(2.0_f32, egui::Color32::from_rgb(80, 200, 255)));
         }
     }
 }

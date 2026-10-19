@@ -88,8 +88,6 @@ impl From<image::ImageError> for AppError {
     }
 }
 
-impl From<AppError> for anyhow::Error {
-    fn from(e: AppError) -> Self {
-        anyhow::Error::msg(e.to_string())
-    }
-}
+// `anyhow::Error` already has a blanket `From<E>` for any
+// `E: std::error::Error + Send + Sync + 'static`, so `AppError` converts into
+// it via `?`. Do NOT add a conflicting `impl From<AppError> for anyhow::Error`.

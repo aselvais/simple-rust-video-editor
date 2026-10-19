@@ -196,7 +196,7 @@ pub fn generate_thumbnail(
 ///            which plays nicely with crops; equivalent visually to hflip+vflip)
 /// * 270° → `transpose=2`          (90° counter-clockwise)
 fn transpose_for_cw(angle: u32) -> Option<&'static str> {
-    match normalise_cw(angle) {
+    match normalise_cw(angle as i64) {
         0 => None,
         90 => Some("transpose=1"),
         180 => Some("transpose=2,transpose=2"),
@@ -290,12 +290,15 @@ fn transform_crop_to_source(
     let mut max_x = i32::MIN;
     let mut max_y = i32::MIN;
 
+    // For 90/270° the display and source axes are swapped, so the *source*
+    // dimensions are swapped relative to the display. `total_cw` is constant, so
+    // compute these once before the loop.
+    let (sw, sh) = match total_cw {
+        0 | 180 => (dw, dh),
+        _ => (dh, dw),
+    };
+
     for (dx, dy) in corners {
-        // For 90/270° the display and source axes are swapped.
-        let (sw, sh) = match total_cw {
-            0 | 180 => (dw, dh),
-            _ => (dh, dw),
-        };
         let (sx, sy) = match total_cw {
             0 => (dx, dy),
             90 => (dy, sw - 1 - dx),
@@ -333,7 +336,7 @@ fn even_align((x, y, w, h): (i32, i32, i32, i32), _pw: u32, _ph: u32) -> (i32, i
 /// This is the "save in place" workhorse: it runs `ffmpeg` with the generated
 /// filter chain, copies the audio stream losslessly (`-c:a copy`), and re-muxes
 /// with fast-start so the result is web/stream friendly.
-pub fn apply_edits(input: &Path, output: &Path, state: &EditState) -> Result<(), AppError> {
+pub fn apply_edits(input: &Path, output: &Path, state: &EditState) -> Result<PathBuf, AppError> {
     // We need the *display* (post-rotation) dimensions to translate the crop.
     let info = probe_metadata(input)?;
     let (dw, dh) = display_dimensions(info.width, info.height, state);
@@ -342,7 +345,7 @@ pub fn apply_edits(input: &Path, output: &Path, state: &EditState) -> Result<(),
     let in_s = input.to_string_lossy().to_string();
     let out_s = output.to_string_lossy().to_string();
 
-    let mut args: Vec<String> = vec!["-y".into(), "-i", in_s];
+    let mut args: Vec<String> = vec!["-y".into(), "-i".into(), in_s];
     if !vf.is_empty() {
         args.push("-vf".into());
         args.push(vf);
@@ -364,7 +367,7 @@ pub fn apply_edits(input: &Path, output: &Path, state: &EditState) -> Result<(),
         out_s,
     ]);
     let ref_args: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    run_ffmpeg(&ref_args)
+    run_ffmpeg(&ref_args).map(|_| output.to_path_buf())
 }
 
 /// Given the *source* (pre-rotation) dimensions and the active edits, return

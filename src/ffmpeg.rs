@@ -117,6 +117,11 @@ pub fn probe_metadata(path: &Path) -> Result<VideoInfo, AppError> {
         ],
     ) {
         let ccw = out.stdout.trim().parse::<i64>().unwrap_or(0);
+        info.metadata_rotation = normalise_cw(360 - ccw);
+    }
+
+    Ok(info)
+}
 
 /// Run `ffmpeg` with the given argument vector, returning a helpful error on
 /// failure. We keep only the tail of stderr so an error toast stays readable.
@@ -203,10 +208,6 @@ fn transpose_for_cw(angle: u32) -> Option<&'static str> {
 pub fn normalise_cw(angle: i64) -> u32 {
     ((angle % 360 + 360) % 360) as u32
 }
-        info.metadata_rotation = normalise_cw(360 - ccw);
-    }
-
-    Ok(info)
 
 /// An axis-aligned rectangle in integer pixel coordinates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -393,5 +394,4 @@ pub fn frame_seek(duration_secs: f64) -> f64 {
     } else {
         1.0
     }
-}
 }

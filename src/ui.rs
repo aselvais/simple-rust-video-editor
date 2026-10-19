@@ -96,7 +96,7 @@ impl QuickEditApp {
             }
         }
     }
-
+}
 
 impl QuickEditApp {
     /// Kick off a background export of the current clip.

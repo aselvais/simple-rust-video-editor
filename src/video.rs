@@ -91,7 +91,6 @@ impl Video {
 }
 
 impl Video {
-impl Video {
     /// Generate (and cache) a thumbnail for the list view.
     pub fn generate_thumbnail(&mut self, seek_secs: f64) -> Result<PathBuf, AppError> {
         let out =
@@ -167,5 +166,4 @@ impl Project {
     pub fn pending_edit_count(&self) -> usize {
         self.videos.iter().filter(|v| v.edit.has_edits()).count()
     }
-}
 }
